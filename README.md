@@ -72,7 +72,7 @@
         </build>
     </project>
     
-  1.2） 配置文件/config/ElasticSearchConfig.java
+  1.2） 方式一、配置类/config/ElasticSearchConfig.java
 
     package com.example.myelasticsearch.config;
 
@@ -96,6 +96,14 @@
         }
 
     }
+    
+  方式二、配置文件application.properties
+  
+    spring.elasticsearch.rest.uris=xxx.xxx.xxx.xxx:9200
+    spring.elasticsearch.rest.username=xxxx
+    spring.elasticsearch.rest.password=xxxx
+    spring.elasticsearch.rest.connection-timeout=5000
+    spring.elasticsearch.rest.read-timeout=30000
 
 2. 代码如下(实体类domain + 数据层dao + 测试类test)
 
