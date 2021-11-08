@@ -303,7 +303,18 @@
                {
                  "query": {
                    "bool": {
-                     "must": [],
+                     "must": [
+                       {
+                         "match": {
+                           "messageId": "21"
+                         }
+                       },
+                       {
+                         "match": {
+                           "isSuccess": "1"
+                         }
+                       }
+                     ],
                      "must_not": [],
                      "should": [],
                      "filter": [
@@ -321,10 +332,10 @@
                  "size": 0,
                  "sort": [],
                  "aggs": {
-                   "exchangeId_cate": {
+                   "exchangeId_sum": {
                      "terms": {
-                       "field": "messageId.keyword"
-                     }, 
+                       "field": "exchangeId.keyword"
+                     },
                      "aggs": {
                        "count_sum": {
                          "sum": {
