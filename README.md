@@ -289,6 +289,176 @@
     }
 
 
+3)进阶--聚合查询
+     3.1）场景一： 单字段聚合
+     /**
+     * 查询条件：开盘时间起--现在excuteTime  messageType = 21 isSuccess = 1
+     * 聚合条件：按messageId分组 求和
+     */
 
+     3.1.1）单字段聚合查询DSL语句
+          GET /log_service_trade_indicator*/_search
+               {
+                 "query": {
+                   "bool": {
+                     "must": [],
+                     "must_not": [],
+                     "should": [],
+                     "filter": [
+                       {
+                         "range": {
+                           "excuteTime": {
+                             "gte": 1636092301945
+                           }
+                         }
+                       }
+                     ]
+                   }
+                 },
+                 "from": 0,
+                 "size": 0,
+                 "sort": [],
+                 "aggs": {
+                   "exchangeId_cate": {
+                     "terms": {
+                       "field": "messageId.keyword"
+                     }, 
+                     "aggs": {
+                       "count_sum": {
+                         "sum": {
+                           "field": "count"
+                         }
+                       }
+                     }
+                   }
+                 }
+               }
 
+     3.1.2）单字段聚合查询java
+          public void entrustSumByExchangeId(){ ;
+             NativeSearchQueryBuilder queryBuilder = new NativeSearchQueryBuilder();
+             //不查询任何结果
+             queryBuilder.withSourceFilter(new FetchSourceFilter(new String[]{""},null));
+             //查询条件 excuteTime开盘时间起--现在  messageId = 21 isSuccess = 1
+             BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
+             boolQueryBuilder.must(QueryBuilders.matchQuery("messageId","21"));
+             boolQueryBuilder.must(QueryBuilders.matchQuery("isSuccess","1"));
+             boolQueryBuilder.filter(QueryBuilders.rangeQuery("excuteTime").gte(1636092301945l));
+             queryBuilder.withQuery(boolQueryBuilder);
+
+             /**
+              *  聚合：按交易所分组 求和
+              *      桶聚合类型为terms，名称为exchangeIds，字段为exchangeId.keyword。
+              *      度量聚合类型为sum，名称exchangeIdSum，字段为count
+              */
+             queryBuilder.addAggregation(
+                     AggregationBuilders.terms("exchangeIds").field("exchangeId.keyword")
+                             .subAggregation(AggregationBuilders.sum("exchangeIdSum").field("count"))
+
+             );
+
+             //查询需要把结果强转为AggregatedPage类型
+             AggregatedPage<TradeIndicatorResult> aggPage = (AggregatedPage<TradeIndicatorResult>) this.tradeIndicatorRepository.search(queryBuilder.build());
+
+             // 结果解析
+             ParsedStringTerms agg = (ParsedStringTerms) aggPage.getAggregation("exchangeIds");
+             List<? extends Terms.Bucket> buckets = agg.getBuckets();
+             buckets.forEach(bucket -> {
+                 ExchangeOrderPerMinCountRespVo respVo = new ExchangeOrderPerMinCountRespVo();
+                 ParsedSum exchangeIdSum = (ParsedSum)bucket.getAggregations().getAsMap().get("exchangeIdSum");
+                 log.info("桶信息：exchangeId的key:{}, 文档数量doc_count:{}。度量信息：sum求和：{}" , bucket.getKeyAsString(), bucket.getDocCount(), exchangeIdSum.getValue());
+             });
+
+         }
+         
+    3.2）场景二：双字段分组聚合     
+     /**
+     * 查询条件：交易日开盘时间起--现在excuteTime
+     * 聚合条件：按 messageType、isSuccess分组  求和
+     */
+     3.2.1）双字段分组聚合查询DSL
+          GET /log_service_trade_indicator*/_search
+               {
+                 "query": {
+                   "bool": {
+                     "must": [],
+                     "must_not": [],
+                     "should": [],
+                     "filter": [
+                       {
+                         "range": {
+                           "excuteTime": {
+                             "gte": 1636092301945
+                           }
+                         }
+                       }
+                     ]
+                   }
+                 },
+                 "from": 0,
+                 "size": 0,
+                 "sort": [],
+                 "aggs": {
+                   "exchangeId_cate": {
+                     "terms": {
+                       "field": "messageId.keyword"
+                     }, 
+                     "aggs": {
+                       "isSuccess_cate": {
+                         "terms": {
+                           "field": "isSuccess.keyword"
+                         },
+                         "aggs": {
+                           "count_sum": {
+                             "sum": {
+                               "field": "count"
+                             }
+                           }
+                         }
+                       }
+                     }
+                   }
+                 }
+               }
+
+     3.2.2）双字段分组聚合查询JAVA
+         public void allKindBusinessIndicator(){
+             NativeSearchQueryBuilder queryBuilder = new NativeSearchQueryBuilder();
+             //不查询任何结果
+             queryBuilder.withSourceFilter(new FetchSourceFilter(new String[]{""},null));
+             //查询条件 excuteTime开盘时间起--现在 
+             BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
+             boolQueryBuilder.filter(QueryBuilders.rangeQuery("excuteTime").gte(1636092301945l));
+             queryBuilder.withQuery(boolQueryBuilder);
+
+             /**
+              * 聚合：按 messageType、isSuccess分组 求和
+              * 桶聚合类型为terms，名称为messageIds，字段为messageId.keyword。
+              *      子聚合类型为terms,名称为isSuccesses，字段为isSuccess.keyword。
+              *          度量聚合类型为sum，名称countSum，字段为count
+              */
+             queryBuilder.addAggregation(
+                     AggregationBuilders.terms("messageIds").field("messageId.keyword")
+                             .subAggregation(AggregationBuilders.terms("isSuccesses").field("isSuccess.keyword")
+                                     .subAggregation(AggregationBuilders.sum("countSum").field("count")))
+
+             );
+
+             //查询需要把结果强转为AggregatedPage类型
+             AggregatedPage<TradeIndicatorResult> aggPage = (AggregatedPage<TradeIndicatorResult>) this.tradeIndicatorRepository.search(queryBuilder.build());
+
+             // 结果解析
+             ParsedStringTerms agg = (ParsedStringTerms) aggPage.getAggregation("messageIds");
+             List<? extends Terms.Bucket> buckets = agg.getBuckets();
+             buckets.forEach(bucket -> {
+                 log.info("桶信息：messageIds的key:{}, 文档数量doc_count:{}。" , bucket.getKeyAsString(), bucket.getDocCount());
+                 ParsedStringTerms subAgg = (ParsedStringTerms)bucket.getAggregations().getAsMap().get("isSuccesses");
+                 List<? extends Terms.Bucket> subAggBuckets = subAgg.getBuckets();
+                 subAggBuckets.forEach(subAggBucket->{
+                     ParsedSum countSum = (ParsedSum)subAggBucket.getAggregations().getAsMap().get("countSum");
+                     log.info("子桶信息：isSuccesses的key:{}, 文档数量doc_count:{}。度量信息：sum求和：{}" , subAggBucket.getKeyAsString(), subAggBucket.getDocCount(), countSum.getValue());
+                 });
+             });
+
+         }
   
