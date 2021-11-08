@@ -289,14 +289,14 @@
     }
 
 
-3)进阶--聚合查询
-     3.1）场景一： 单字段聚合
+四、进阶--聚合查询
+     4.1）场景一： 单字段聚合
      /**
      * 查询条件：开盘时间起--现在excuteTime  messageType = 21 isSuccess = 1
      * 聚合条件：按messageId分组 求和
      */
 
-     3.1.1）单字段聚合查询DSL语句
+     4.1.1）单字段聚合查询DSL语句
           GET /log_service_trade_indicator*/_search
                {
                  "query": {
@@ -334,7 +334,7 @@
                  }
                }
 
-     3.1.2）单字段聚合查询java
+     4.1.2）单字段聚合查询java
           public void entrustSumByExchangeId(){ ;
              NativeSearchQueryBuilder queryBuilder = new NativeSearchQueryBuilder();
              //不查询任何结果
@@ -371,12 +371,12 @@
 
          }
          
-    3.2）场景二：双字段分组聚合     
+    4.2）场景二：双字段分组聚合     
      /**
      * 查询条件：交易日开盘时间起--现在excuteTime
      * 聚合条件：按 messageType、isSuccess分组  求和
      */
-     3.2.1）双字段分组聚合查询DSL
+     4.2.1）双字段分组聚合查询DSL
           GET /log_service_trade_indicator*/_search
                {
                  "query": {
@@ -421,7 +421,7 @@
                  }
                }
 
-     3.2.2）双字段分组聚合查询JAVA
+     4.2.2）双字段分组聚合查询JAVA
          public void allKindBusinessIndicator(){
              NativeSearchQueryBuilder queryBuilder = new NativeSearchQueryBuilder();
              //不查询任何结果
