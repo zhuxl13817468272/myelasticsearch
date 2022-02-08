@@ -1,7 +1,7 @@
 一、项目技术简介:
 
      首先，本项目是直接copy代码可以运行成功的。
-     其次，本项目使用高版本官方推荐的ElasticsearchRestTemplate。Elasticsearch在高版本中，官方建议我们使用：High Level REST Client，也可以兼容低版本的ElasticsearchTemplate。官方参考网址:https://docs.spring.io/spring-data/elasticsearch/docs/3.2.6.RELEASE/reference/html/#elasticsearch.operations.resttemplate。
+     其次，本项目使用高版本官方推荐的ElasticsearchRestTemplate。Elasticsearch在高版本中，官方建议我们使用：High Level REST Client，也可以兼容低版本的ElasticsearchTemplate。官方参考网址:https://docs.spring.io/spring-data/elasticsearch/docs/3.2.6.RELEASE/reference/html/#elasticsearch.operations.resttemplate。 很好的项目实例：https://github.com/spring-projects/spring-data-elasticsearch
      最后，本项目中连接Elasticsearch数据层除了使用Spring Data Jpa的API之外，也使用了DSL(Domain Special Language)语言。DSL语言参考：https://www.cnblogs.com/ifme/p/12004660.html。 Spring Data ElasticSearch参考文章：https://www.cnblogs.com/ifme/p/12005026.html
      
 二、项目前提--安装elasticsearch：
