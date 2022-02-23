@@ -478,3 +478,159 @@
 
          }
   
+
+五、进阶--RestHighLevelClient查询
+
+
+     5.1）DSL语句查询
+
+     private RestResponse getDslRestResponse(Long projectId, Date startTime, Date endTime, String dslConditions) throws IOException {
+        log.info("进入DSL条件查询");
+        // 获取索引权限（索引权限、字段权限）
+        Project project = this.getProject(projectId);
+
+        /**
+         *  1. 查询条件封装   a.排序和分页写在dsl中  b.权限字段写在dsl中  c.不支持scroll
+         */
+        // 配置查询的索引信息
+        StringBuffer indexes = new StringBuffer();
+        String projectIndex = project.getProjectIndex();
+        Set<String> days = DateUtils.betweenDays(startTime, endTime);
+        days.forEach(day -> {
+            indexes.append(String.format("%s" + day, projectIndex)).append(",");
+        });
+        String idxes = indexes.substring(0, indexes.length() - 1);
+        log.info("DSL生成索引为：{}",idxes);
+
+        /**
+         *  2. 查询
+         */
+        Request request = new Request("GET","/" +idxes+"/_search");
+        request.setJsonEntity(dslConditions);
+        Response response = restHighLevelClient.getLowLevelClient().performRequest(request);
+
+        /**
+         *  3. 结果解析,并封装返回
+         */
+        String respStr = EntityUtils.toString(response.getEntity());
+        String outerHits = JSONObject.parseObject(respStr).getString("hits");
+        String innerHits = JSONObject.parseObject(outerHits).getString("hits");
+        List<HitsBeanMo> hitsBeanMos = JSONArray.parseArray(innerHits, HitsBeanMo.class);
+        List<HitsBeanMo.SourceBean> list = hitsBeanMos.stream().map(f -> f.get_source()).collect(Collectors.toList());
+
+        PageResponse<HitsBeanMo.SourceBean> pageResponse = new PageResponse<>();
+        pageResponse.setList(list);
+        return RestResponse.ok(pageResponse);
+    }
+      
+      
+
+
+    5.2）普通条件查询     
+
+
+      private RestResponse getConditionRestResponse(int pageSize, Long projectId, Date startTime, Date endTime, String ip, String logLevel, String scrollId, String moreConditions) throws IOException {
+        log.info("进入普通条件查询");
+        SearchResponse searchResponse;
+
+        //第一次查询(不带scrollId)
+        if (StringUtils.isBlank(scrollId)) {
+            // 调用es --> 查询数据 默认是7天的
+            if ((endTime.getTime() - startTime.getTime()) > sevenDay) {
+                throw new RuntimeException("日志查询间隔不能超过7天");
+            }
+
+            // 获取索引权限（索引权限、字段权限）
+            Project project = this.getProject(projectId);
+
+            SearchRequest searchRequest = new SearchRequest();
+
+            /**
+             * 1. 查询条件封装
+             */
+            // 1.1 查询条件封装
+            SearchSourceBuilder builder = new SearchSourceBuilder();
+            BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
+            boolQueryBuilder.filter(QueryBuilders.rangeQuery("eventTimestamp").gte(startTime.getTime()).lte(endTime.getTime()));
+            if(StringUtils.isNotEmpty(ip)) {
+                boolQueryBuilder.must(QueryBuilders.termQuery("hostName.keyword", ip));
+            }
+            if(StringUtils.isNotEmpty(logLevel)) {
+                if(logLevel.contains("warn")){
+                    logLevel = logLevel.concat(",warning");
+                }
+                BoolQueryBuilder must_bool = QueryBuilders.boolQuery();
+                String[] logLevels = logLevel.split(",");
+                for (String level : logLevels) {
+                    must_bool.should(QueryBuilders.termQuery("level", level));
+                }
+                boolQueryBuilder.must(must_bool);
+            }
+            // 模糊搜索条件封装，前端moreConditions传参值为：{"method":"FuturesServer","msg":"md5 HeartBeat"}，其中key为字段，value为字段值
+            if(StringUtils.isNotEmpty(moreConditions)) {
+                Map<String, String> map = JSONObject.parseObject(moreConditions, Map.class);
+                map.forEach((key, value) -> {
+                    boolQueryBuilder.must(QueryBuilders.matchQuery(key, value));
+                });
+            }
+            builder.query(boolQueryBuilder);
+
+            // 1.2. 排序分页
+            builder.sort("eventTimestamp", SortOrder.DESC);
+            // 分页查询已经取消 builder.from((pageNum - 1) * pageSize);
+            builder.size(pageSize);
+
+            // 1.3. 查询包含权限字段
+            List<String> properties = project.getChildren().stream().map(Project::getProperty).collect(Collectors.toList());
+            String[] propertiesArray = properties.toArray(new String[properties.size()]);
+            builder.fetchSource(propertiesArray, new String[]{});
+
+            // 1.4. 最终条件封装
+            log.info("最终条件：{}",builder);
+            searchRequest.source(builder);
+
+            /**
+             *  2. 配置查询的索引
+             */
+            StringBuffer indexes = new StringBuffer();
+            String projectIndex = project.getProjectIndex();
+            Set<String> days = DateUtils.betweenDays(startTime, endTime);
+            days.forEach(day -> {
+                indexes.append(String.format("%s" + day, projectIndex)).append(",");
+            });
+            log.info("添加搜索生成索引为：{}",indexes.substring(0, indexes.length() - 1));
+            searchRequest.indices(indexes.substring(0, indexes.length() - 1));
+
+
+            /**
+             *  3. 配置scroll，并查询
+             */
+            searchRequest.scroll(scroll);
+            searchResponse = this.restHighLevelClient.search(searchRequest, RequestOptions.DEFAULT);
+
+        } else {
+            // 带scrollId查询（非第一次查询）
+            SearchScrollRequest searchScrollRequest = new SearchScrollRequest(scrollId);
+            searchScrollRequest.scroll(scroll);
+            searchResponse = restHighLevelClient.scroll(searchScrollRequest, RequestOptions.DEFAULT);
+        }
+
+        /**
+         *  4. 结果解析,并封装返回
+         */
+        String returnScrollId = searchResponse.getScrollId();
+        SearchHits hits = searchResponse.getHits();
+        ArrayList<Map<String, Object>> results = new ArrayList<>();
+        for (SearchHit hit : hits) {
+            Map<String, Object> sourceAsMap = hit.getSourceAsMap();
+            //增加id字段，以便前端可以做数据定位
+            sourceAsMap.put("id",hit.getId());
+            results.add(hit.getSourceAsMap());
+        }
+
+        PageResponse<Map<String, Object>> pageResponse = new PageResponse<>();
+        pageResponse.setScrollId(returnScrollId);
+        pageResponse.setTotal(hits.getTotalHits().value);
+        pageResponse.setList(results);
+        return RestResponse.ok(pageResponse);
+    }
