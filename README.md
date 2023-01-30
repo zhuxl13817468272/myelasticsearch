@@ -526,111 +526,151 @@
       
 
 
-    5.2）普通条件查询     
+    5.3）Groovy脚本中，先DSL查询，在插入示例     
 
 
-      private RestResponse getConditionRestResponse(int pageSize, Long projectId, Date startTime, Date endTime, String ip, String logLevel, String scrollId, String moreConditions) throws IOException {
-        log.info("进入普通条件查询");
-        SearchResponse searchResponse;
+      
+          import cn.hutool.extra.spring.SpringUtil
+          import com.alibaba.fastjson.JSONArray
+          import com.alibaba.fastjson.JSONObject
+          import com.em.commonModule.analysisCenter.entity.ScriptResult
+          import org.apache.commons.lang3.StringUtils
+          import org.elasticsearch.action.index.IndexRequest
+          import org.elasticsearch.action.index.IndexResponse
+          import org.elasticsearch.client.Request
+          import org.elasticsearch.client.RequestOptions
+          import org.elasticsearch.client.RestHighLevelClient
+          import org.elasticsearch.client.indices.GetIndexRequest
+          import org.apache.http.util.EntityUtils
+          import org.elasticsearch.client.Response
+          import org.slf4j.Logger
+          import org.slf4j.LoggerFactory
 
-        //第一次查询(不带scrollId)
-        if (StringUtils.isBlank(scrollId)) {
-            // 调用es --> 查询数据 默认是7天的
-            if ((endTime.getTime() - startTime.getTime()) > sevenDay) {
-                throw new RuntimeException("日志查询间隔不能超过7天");
-            }
+          import java.time.LocalDateTime
+          import java.time.ZoneId
+          import java.time.format.DateTimeFormatter
 
-            // 获取索引权限（索引权限、字段权限）
-            Project project = this.getProject(projectId);
+          /**
+           *       1. 根据DSL语句查询；
+           *       2. 查询结果解析
+           *       3. 插入数据
+           * @return
+           */
+          def getDslResult() {
 
-            SearchRequest searchRequest = new SearchRequest();
+              LocalDateTime now = LocalDateTime.now();
+              String today = now.format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+              long startTime = now.minusMinutes(3).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+              long endTime = now.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+              String idx = "log_service_cloudorder_conn_reuse_" + today;
 
-            /**
-             * 1. 查询条件封装
-             */
-            // 1.1 查询条件封装
-            SearchSourceBuilder builder = new SearchSourceBuilder();
-            BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
-            boolQueryBuilder.filter(QueryBuilders.rangeQuery("eventTimestamp").gte(startTime.getTime()).lte(endTime.getTime()));
-            if(StringUtils.isNotEmpty(ip)) {
-                boolQueryBuilder.must(QueryBuilders.termQuery("hostName.keyword", ip));
-            }
-            if(StringUtils.isNotEmpty(logLevel)) {
-                if(logLevel.contains("warn")){
-                    logLevel = logLevel.concat(",warning");
-                }
-                BoolQueryBuilder must_bool = QueryBuilders.boolQuery();
-                String[] logLevels = logLevel.split(",");
-                for (String level : logLevels) {
-                    must_bool.should(QueryBuilders.termQuery("level", level));
-                }
-                boolQueryBuilder.must(must_bool);
-            }
-            // 模糊搜索条件封装，前端moreConditions传参值为：{"method":"FuturesServer","msg":"md5 HeartBeat"}，其中key为字段，value为字段值
-            if(StringUtils.isNotEmpty(moreConditions)) {
-                Map<String, String> map = JSONObject.parseObject(moreConditions, Map.class);
-                map.forEach((key, value) -> {
-                    boolQueryBuilder.must(QueryBuilders.matchQuery(key, value));
-                });
-            }
-            builder.query(boolQueryBuilder);
+          //    long startTime = 1655275408000l;
+          //    long endTime = 1669927283420l;
+          //    String idx = "log_service_backhand_conn_reuse_20220822";
+              String dslConditions = "{\n" +
+                      "  \"query\": {\n" +
+                      "    \"bool\": {\n" +
+                      "      \"must\": [\n" +
+                      "        {\"match_phrase\": { \"msg\": \"ReqOrderInsertPact requestJson\"}}\n" +
+                      "      ],\n" +
+                      "      \"filter\": [\n" +
+                      "        {\n" +
+                      "          \"range\": {\n" +
+                      "            \"eventTimestamp\": {\n" +
+                      "               \"gte\":" + startTime + ",\n" +
+                      "               \"lte\": " + endTime + "\n" +
+                      "            }\n" +
+                      "          }\n" +
+                      "        }\n" +
+                      "      ]\n" +
+                      "    }\n" +
+                      "  },\n" +
+                      "  \"from\": 0,\n" +
+                      "  \"size\": 10,\n" +
+                      "  \"aggs\": {}\n" +
+                      "}";
 
-            // 1.2. 排序分页
-            builder.sort("eventTimestamp", SortOrder.DESC);
-            // 分页查询已经取消 builder.from((pageNum - 1) * pageSize);
-            builder.size(pageSize);
+              // 1. 根据DSL语句查询
+              RestHighLevelClient restHighLevelClient = SpringUtil.getBean(RestHighLevelClient);
+              GetIndexRequest getIndexRequest = new GetIndexRequest(idx)
+              boolean exists = restHighLevelClient.indices().exists(getIndexRequest, RequestOptions.DEFAULT);
+              if (!exists) {
+                  return null;
+              }
+              Request request = new Request("GET", "/" + idx + "/_search");
+              request.setJsonEntity(dslConditions);
+              return restHighLevelClient.getLowLevelClient().performRequest(request);
+          }
 
-            // 1.3. 查询包含权限字段
-            List<String> properties = project.getChildren().stream().map(Project::getProperty).collect(Collectors.toList());
-            String[] propertiesArray = properties.toArray(new String[properties.size()]);
-            builder.fetchSource(propertiesArray, new String[]{});
+          /**
+           * 脚本执行入口
+           *     2. 查询结果解析
+           *     3. 插入数据
+           * */
+          def mainCall() {
+              Logger logger = LoggerFactory.getLogger("groovy")
+              try {
 
-            // 1.4. 最终条件封装
-            log.info("最终条件：{}",builder);
-            searchRequest.source(builder);
+                  // 2. 查询结果解析
+                  Response response = getDslResult();
+                  if (response == null) {
+                      return ScriptResult.warnWithData("索引为空");
+                  }
 
-            /**
-             *  2. 配置查询的索引
-             */
-            StringBuffer indexes = new StringBuffer();
-            String projectIndex = project.getProjectIndex();
-            Set<String> days = DateUtils.betweenDays(startTime, endTime);
-            days.forEach(day -> {
-                indexes.append(String.format("%s" + day, projectIndex)).append(",");
-            });
-            log.info("添加搜索生成索引为：{}",indexes.substring(0, indexes.length() - 1));
-            searchRequest.indices(indexes.substring(0, indexes.length() - 1));
+                  List<HashMap<String, Object>> insertMapList = new ArrayList<>();
+                  HashMap<String, Object> insertMap = new HashMap<>();
+                  String respStr = EntityUtils.toString(response.getEntity());
+                  JSONObject outerHits = JSONObject.parseObject(respStr).getJSONObject("hits");
+                  String value = outerHits.getJSONObject("total").getString("value");
+                  logger.info("查询结果条数：{}", value);
+                  if (java.lang.Integer.valueOf(value) > 0) {
+                      String innerHits = outerHits.getString("hits");
+                      List<JSONObject> jsonObjects = JSONArray.parseArray(innerHits, JSONObject.class);
+                      for (JSONObject jsonObj: jsonObjects){
+                          JSONObject source = jsonObj.getJSONObject("_source");
+                          if(StringUtils.isNotEmpty(source.getString("msg"))){
+                              int startIndex = source.getString("msg").indexOf("{");
+                              int endIndex = source.getString("msg").indexOf("}");
+                              JSONObject orderMsgJson = JSONObject.parseObject(source.getString("msg").substring(startIndex, endIndex+1));
+                              insertMap.put("instrumentID", orderMsgJson.getString("InstrumentID"));
+                              insertMap.put("direction", orderMsgJson.getString("Direction"));
+                              insertMap.put("combOffsetFlag", orderMsgJson.getString("CombOffsetFlag"));
+                              insertMap.put("exchangeID", orderMsgJson.getString("ExchangeID"));
+                              insertMap.put("investorID", orderMsgJson.getString("InvestorID"));
+                              insertMap.put("volumeTotalOriginal", orderMsgJson.getString("VolumeTotalOriginal"));
+
+                              insertMap.put("hostName", source.getString("hostName"));
+                              insertMap.put("timestamp", source.getDate("timestamp"));
+                              insertMap.put("eventTime", source.getDate("eventTime"));
+                              insertMap.put("eventTimestamp", source.getLong("eventTimestamp"));
+                              insertMapList.add(insertMap);
+                          }
+                      }
+
+                      //3. 插入数据  BulkRequest它只支持JSON或SHAY源数据，所以对于HashMap的形式建议单条插入
+                      if(insertMapList.size() > 0){
+                          RestHighLevelClient restHighLevelClient = SpringUtil.getBean(RestHighLevelClient);
+                          for(HashMap<String, Object> insert: insertMapList){
+                              if(insert.size() > 0){
+
+                                  IndexRequest req = new IndexRequest("grafana_data_conn_reuse_ccorder_order_" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd")),"_doc", UUID.randomUUID().toString()).source(insertMap);
+                                  IndexResponse indexResponse = restHighLevelClient.index(req, RequestOptions.DEFAULT);
+                                  logger.info("插入数据结果：{}", indexResponse.getResult());
+                              }
+                          }
+                      }
+
+                      logger.info("插入数据条数：{}", insertMapList.size());
+                      return ScriptResult.okWithData("插入数据成功，条数：" + insertMapList.size());
+                  } else {
+                      return ScriptResult.okWithData("查询结果为空");
+                  }
+
+              }catch (Exception e) {
+                  logger.error("插入数据失败："+e);
+                  return ScriptResult.warn("插入数据失败，信息：" + (!StringUtils.equals(e.getMessage(), "null") && e.getMessage().length() >= 200 ? e.getMessage().substring(0, 200) : e.getMessage()));
+              }
+          }
 
 
-            /**
-             *  3. 配置scroll，并查询
-             */
-            searchRequest.scroll(scroll);
-            searchResponse = this.restHighLevelClient.search(searchRequest, RequestOptions.DEFAULT);
-
-        } else {
-            // 带scrollId查询（非第一次查询）
-            SearchScrollRequest searchScrollRequest = new SearchScrollRequest(scrollId);
-            searchScrollRequest.scroll(scroll);
-            searchResponse = restHighLevelClient.scroll(searchScrollRequest, RequestOptions.DEFAULT);
-        }
-
-        /**
-         *  4. 结果解析,并封装返回
-         */
-        String returnScrollId = searchResponse.getScrollId();
-        SearchHits hits = searchResponse.getHits();
-        ArrayList<Map<String, Object>> results = new ArrayList<>();
-        for (SearchHit hit : hits) {
-            Map<String, Object> sourceAsMap = hit.getSourceAsMap();
-            //增加id字段，以便前端可以做数据定位
-            sourceAsMap.put("id",hit.getId());
-            results.add(hit.getSourceAsMap());
-        }
-
-        PageResponse<Map<String, Object>> pageResponse = new PageResponse<>();
-        pageResponse.setScrollId(returnScrollId);
-        pageResponse.setTotal(hits.getTotalHits().value);
-        pageResponse.setList(results);
-        return RestResponse.ok(pageResponse);
-    }
+          mainCall()
